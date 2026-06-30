@@ -3,12 +3,15 @@
 set -euo pipefail
 
 PROG="${0##*/}"
+DEST="."
 
 usage() {
   cat <<USAGE
 $PROG — extract common archive formats with one command.
 
-usage: $PROG [-h] <archive> [<archive>...]
+usage: $PROG [-h] [-C DIR] <archive> [<archive>...]
+
+  -C, --dir DIR   extract into DIR (created if needed; default: current dir)
 
 Supported: .tar.gz .tgz .tar.bz2 .tbz2 .tar.xz .txz .tar
            .gz .bz2 .Z .zip .7z .rar
@@ -20,37 +23,52 @@ die() {
   exit 1
 }
 
-# Ensure an external helper exists before we rely on it.
 need() {
   command -v "$1" >/dev/null 2>&1 || die "required tool not found: $1"
+}
+
+# decompress a single-stream file (.gz/.bz2/.Z) into DEST
+stream_out() {
+  local file="$1" tool="$2" suffix="$3"
+  need "$tool"
+  "$tool" -c "$file" > "$DEST/$(basename "${file%"$suffix"}")"
 }
 
 extract_one() {
   local file="$1"
   [[ -f "$file" ]] || die "no such file: $file"
+  mkdir -p "$DEST"
 
   case "$file" in
-    *.tar.gz|*.tgz)   need tar;       tar -xzf "$file" ;;
-    *.tar.bz2|*.tbz2) need tar;       tar -xjf "$file" ;;
-    *.tar.xz|*.txz)   need tar;       tar -xJf "$file" ;;
-    *.tar)            need tar;       tar -xf  "$file" ;;
-    *.gz)             need gunzip;    gunzip -k "$file" ;;
-    *.bz2)            need bunzip2;   bunzip2 -k "$file" ;;
-    *.Z)              need uncompress; uncompress "$file" ;;
-    *.zip)            need unzip;     unzip -q "$file" ;;
-    *.7z)             need 7z;        7z x "$file" ;;
-    *.rar)            need unrar;     unrar x "$file" ;;
+    *.tar.gz|*.tgz)   need tar;   tar -xzf "$file" -C "$DEST" ;;
+    *.tar.bz2|*.tbz2) need tar;   tar -xjf "$file" -C "$DEST" ;;
+    *.tar.xz|*.txz)   need tar;   tar -xJf "$file" -C "$DEST" ;;
+    *.tar)            need tar;   tar -xf  "$file" -C "$DEST" ;;
+    *.gz)             stream_out "$file" gunzip .gz ;;
+    *.bz2)            stream_out "$file" bunzip2 .bz2 ;;
+    *.Z)              stream_out "$file" uncompress .Z ;;
+    *.zip)            need unzip; unzip -q "$file" -d "$DEST" ;;
+    *.7z)             need 7z;    7z x -o"$DEST" "$file" >/dev/null ;;
+    *.rar)            need unrar; unrar x "$file" "$DEST/" ;;
     *)                die "unknown archive type: $file" ;;
   esac
 
-  printf '%s: extracted %s\n' "$PROG" "$file"
+  printf '%s: extracted %s -> %s\n' "$PROG" "$file" "$DEST"
 }
 
 main() {
-  case "${1:-}" in
-    ''|-h|--help) usage; exit "$( [[ -z "${1:-}" ]] && echo 1 || echo 0 )" ;;
-  esac
-  for file in "$@"; do
+  local files=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      -C|--dir)  DEST="${2:-}"; [[ -n "$DEST" ]] || die "-C needs a directory"; shift 2 ;;
+      --)        shift; while [[ $# -gt 0 ]]; do files+=("$1"); shift; done ;;
+      -*)        die "unknown option: $1" ;;
+      *)         files+=("$1"); shift ;;
+    esac
+  done
+  [[ ${#files[@]} -gt 0 ]] || { usage; exit 1; }
+  for file in "${files[@]}"; do
     extract_one "$file"
   done
 }
